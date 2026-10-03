@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  webhook-bridge:
+    build: .
+    container_name: webhook-bridge
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      PORT: "8080"
+      UPSTREAM_URL: "${UPSTREAM_URL}"
+      UPSTREAM_BEARER: "${UPSTREAM_BEARER:-}"
+      UPSTREAM_AUTH_HEADER: "${UPSTREAM_AUTH_HEADER:-}"
+      SHARED_SECRET: "${SHARED_SECRET:-}"
+    restart: unless-stopped
