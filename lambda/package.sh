@@ -18,4 +18,4 @@ rm -f "$OUT"
 
 echo "Wrote ${OUT}"
 echo "Upload to Lambda and set handler to: handler.handler"
-echo "Configure env: UPSTREAM_URL (required), SHARED_SECRET, UPSTREAM_BEARER, UPSTREAM_AUTH_HEADER"
+echo "Configure env: UPSTREAM_URL (required), SHARED_SECRET, UPSTREAM_BEARER, UPSTREAM_AUTH_HEADER, UPSTREAM_HEADERS"

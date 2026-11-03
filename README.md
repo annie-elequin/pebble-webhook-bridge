@@ -54,6 +54,7 @@ You keep Docker as the everyday self-host path. Friends who prefer AWS can use t
 | `UPSTREAM_URL` | **Yes** | — | Destination webhook URL (any JSON POST endpoint) |
 | `UPSTREAM_BEARER` | No | — | Bearer token for upstream |
 | `UPSTREAM_AUTH_HEADER` | No | — | Full `Authorization` value (overrides `UPSTREAM_BEARER`) |
+| `UPSTREAM_HEADERS` | No | — | Extra outgoing headers as a JSON object, e.g. `{"X-Custom":"abc"}`. Merged onto the upstream POST. `UPSTREAM_AUTH_HEADER` / `UPSTREAM_BEARER` still override `Authorization` when set. |
 | `SHARED_SECRET` | No | — | Require `X-Bridge-Token` or `Authorization: Bearer` on incoming requests |
 
 ## Endpoints

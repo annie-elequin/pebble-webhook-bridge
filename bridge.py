@@ -76,12 +76,39 @@ def parse_body(content_type: str, body_bytes: bytes) -> JsonDict:
     raise UnsupportedContentType(f"Unsupported content type: {content_type or '(missing)'}")
 
 
+def parse_upstream_headers(raw: Optional[str] = None) -> dict[str, str]:
+    """Parse UPSTREAM_HEADERS JSON object into a string header map.
+
+    Example: {"X-Custom":"abc","X-OpenBot-Key":"…"}
+    Empty / unset → no extra headers.
+    """
+    value = raw if raw is not None else os.environ.get("UPSTREAM_HEADERS", "")
+    if value is None or not str(value).strip():
+        return {}
+
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"UPSTREAM_HEADERS must be a JSON object: {e}") from e
+
+    if not isinstance(parsed, dict):
+        raise ValueError("UPSTREAM_HEADERS must be a JSON object of string keys to string values")
+
+    headers: dict[str, str] = {}
+    for key, val in parsed.items():
+        if val is None:
+            continue
+        headers[str(key)] = val if isinstance(val, str) else json.dumps(val)
+    return headers
+
+
 def forward_to_upstream(
     payload: JsonDict,
     *,
     upstream_url: Optional[str] = None,
     upstream_bearer: Optional[str] = None,
     upstream_auth_header: Optional[str] = None,
+    upstream_headers: Optional[Mapping[str, str]] = None,
     timeout: float = 10.0,
 ) -> Tuple[int, JsonDict]:
     """POST payload as application/json to UPSTREAM_URL."""
@@ -93,6 +120,18 @@ def forward_to_upstream(
         "Content-Type": "application/json",
         "User-Agent": "webhook-bridge/1.0",
     }
+
+    try:
+        extra = (
+            dict(upstream_headers)
+            if upstream_headers is not None
+            else parse_upstream_headers()
+        )
+    except ValueError as e:
+        return 500, {"error": str(e)}
+
+    # Extra headers apply next; dedicated auth env vars still win for Authorization.
+    headers.update(extra)
 
     auth_header = (
         upstream_auth_header
