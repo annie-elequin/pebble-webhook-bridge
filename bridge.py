@@ -3,6 +3,8 @@ Shared webhook bridge logic — used by the Docker HTTP server and AWS Lambda.
 """
 from __future__ import annotations
 
+import base64
+import email
 import hashlib
 import hmac
 import json
@@ -11,6 +13,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
+from email import policy
 from typing import Any, Mapping, MutableMapping, Optional, Tuple, Union
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs
@@ -57,12 +60,80 @@ def check_auth(headers: Headers, shared_secret: Optional[str] = None) -> bool:
     return False
 
 
+def _store_form_value(result: JsonDict, name: str, value: Any) -> None:
+    """Accumulate form fields; repeated names become a list."""
+    if name in result:
+        existing = result[name]
+        if isinstance(existing, list):
+            existing.append(value)
+        else:
+            result[name] = [existing, value]
+    else:
+        result[name] = value
+
+
+def parse_multipart(content_type_header: str, body_bytes: bytes) -> JsonDict:
+    """Parse multipart/form-data (what Pebble / Index 01 often sends) into a JSON object.
+
+    Text fields become string values. File parts become
+    ``{"filename": "...", "content_type": "...", "content": "..."}`` when UTF-8
+    decodable, otherwise ``base64`` instead of ``content``.
+    """
+    preamble = f"Content-Type: {content_type_header}\r\nMIME-Version: 1.0\r\n\r\n".encode(
+        "utf-8"
+    )
+    msg = email.message_from_bytes(preamble + body_bytes, policy=policy.default)
+    if not msg.is_multipart():
+        raise ValueError("multipart/form-data body was not multipart")
+
+    result: JsonDict = {}
+    for part in msg.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        name = str(name)
+
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            content = part.get_content()
+            value: Any = content if isinstance(content, str) else str(content)
+        else:
+            charset = part.get_content_charset() or "utf-8"
+            try:
+                text = payload.decode(charset)
+                if filename:
+                    value = {
+                        "filename": filename,
+                        "content_type": part.get_content_type(),
+                        "content": text,
+                    }
+                else:
+                    value = text
+            except UnicodeDecodeError:
+                value = {
+                    "filename": filename,
+                    "content_type": part.get_content_type(),
+                    "base64": base64.b64encode(payload).decode("ascii"),
+                }
+
+        _store_form_value(result, name, value)
+
+    return result
+
+
 def parse_body(content_type: str, body_bytes: bytes) -> JsonDict:
     """Parse an incoming body into a JSON-serializable dict (pass-through fields)."""
-    body = body_bytes.decode("utf-8")
-    content_type = (content_type or "").lower().split(";")[0].strip()
+    raw_content_type = content_type or ""
+    media_type = raw_content_type.lower().split(";")[0].strip()
 
-    if content_type == "application/json" or content_type.endswith("+json"):
+    if media_type == "multipart/form-data":
+        # Keep the full header (includes boundary=…).
+        return parse_multipart(raw_content_type, body_bytes)
+
+    body = body_bytes.decode("utf-8")
+
+    if media_type == "application/json" or media_type.endswith("+json"):
         try:
             parsed = json.loads(body) if body else {}
             if isinstance(parsed, dict):
@@ -71,11 +142,11 @@ def parse_body(content_type: str, body_bytes: bytes) -> JsonDict:
         except json.JSONDecodeError:
             return {"text": body}
 
-    if content_type == "application/x-www-form-urlencoded":
+    if media_type == "application/x-www-form-urlencoded":
         parsed = parse_qs(body, keep_blank_values=True)
         return {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
 
-    if content_type == "text/plain" or content_type == "":
+    if media_type == "text/plain" or media_type == "":
         # Empty content-type: try JSON, else wrap as text (common for simple clients).
         try:
             parsed = json.loads(body) if body else {}
@@ -85,7 +156,7 @@ def parse_body(content_type: str, body_bytes: bytes) -> JsonDict:
         except json.JSONDecodeError:
             return {"text": body}
 
-    raise UnsupportedContentType(f"Unsupported content type: {content_type or '(missing)'}")
+    raise UnsupportedContentType(f"Unsupported content type: {media_type or '(missing)'}")
 
 
 def openbot_mode_enabled(secret: Optional[str] = None) -> bool:

@@ -50,6 +50,47 @@ class ParseBodyTests(unittest.TestCase):
         )
         self.assertEqual(result, {"ok": True})
 
+    def test_multipart_form_data(self):
+        boundary = "7c643b7d-c810-4d52-92c0-0f5614f1edb3"
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="text"\r\n'
+            f"\r\n"
+            f"hello from pebble\r\n"
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="title"\r\n'
+            f"\r\n"
+            f"ring note\r\n"
+            f"--{boundary}--\r\n"
+        ).encode("utf-8")
+        result = parse_body(
+            f"multipart/form-data; boundary={boundary}",
+            body,
+        )
+        self.assertEqual(
+            result,
+            {"text": "hello from pebble", "title": "ring note"},
+        )
+
+    def test_multipart_with_file_field(self):
+        boundary = "abc123"
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="note"\r\n'
+            f"\r\n"
+            f"caption\r\n"
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="a.txt"\r\n'
+            f"Content-Type: text/plain\r\n"
+            f"\r\n"
+            f"file-bytes\r\n"
+            f"--{boundary}--\r\n"
+        ).encode("utf-8")
+        result = parse_body(f"multipart/form-data; boundary={boundary}", body)
+        self.assertEqual(result["note"], "caption")
+        self.assertEqual(result["file"]["filename"], "a.txt")
+        self.assertEqual(result["file"]["content"], "file-bytes")
+
     def test_unsupported(self):
         with self.assertRaises(UnsupportedContentType):
             parse_body("application/xml", b"<xml/>")
