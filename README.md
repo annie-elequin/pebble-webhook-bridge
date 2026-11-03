@@ -16,6 +16,7 @@ Pebble / Index 01  →  your bridge URL  →  UPSTREAM_URL (any JSON webhook)
 
 - `application/json` — forwarded as-is (object pass-through)
 - `application/x-www-form-urlencoded` — fields become a JSON object
+- `multipart/form-data` — form fields become a JSON object (Pebble / Index 01 often uses this)
 - `text/plain` — parse as JSON if valid, otherwise wrap as `{"text": "..."}`
 
 By default, payload fields are **not** reshaped for a specific chat product. When optional **OpenBot signing** is enabled, the converted payload is wrapped in OpenBot’s required event envelope and signed (see below).
