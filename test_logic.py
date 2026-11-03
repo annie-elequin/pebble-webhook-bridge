@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """Quick smoke test of the webhook bridge logic"""
+import hashlib
+import hmac
 import json
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
 from bridge import (
     UnsupportedContentType,
+    build_openbot_envelope,
     check_auth,
+    forward_to_upstream,
     handle_get,
     handle_post,
     parse_body,
+    serialize_json_body,
+    sign_openbot_request,
 )
 
 
@@ -68,6 +75,85 @@ class AuthTests(unittest.TestCase):
         )
 
 
+class OpenBotSigningTests(unittest.TestCase):
+    def test_sign_matches_docs_formula(self):
+        body = '{"type":"deployment.completed","data":{"environment":"production"}}'
+        secret = "whsec_test_secret"
+        ts, did, sig = sign_openbot_request(
+            body,
+            secret,
+            timestamp="1700000000",
+            delivery_id="abc-123",
+        )
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            b"1700000000.abc-123." + body.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertEqual(ts, "1700000000")
+        self.assertEqual(did, "abc-123")
+        self.assertEqual(sig, f"sha256={expected}")
+
+    def test_envelope_wraps_payload(self):
+        envelope = build_openbot_envelope(
+            {"text": "hello ring"},
+            event_type="pebble.transcription",
+        )
+        self.assertEqual(envelope["type"], "pebble.transcription")
+        self.assertEqual(envelope["data"], {"text": "hello ring"})
+        self.assertIn("occurredAt", envelope)
+
+    def test_envelope_passthrough_existing(self):
+        existing = {
+            "type": "custom.event",
+            "data": {"ok": True},
+            "occurredAt": "2026-01-01T00:00:00.000Z",
+        }
+        self.assertEqual(build_openbot_envelope(existing), existing)
+
+    def test_forward_adds_openbot_headers(self):
+        fake_resp = MagicMock()
+        fake_resp.status = 202
+        fake_resp.read.return_value = b"accepted"
+        fake_resp.__enter__.return_value = fake_resp
+        fake_resp.__exit__.return_value = False
+
+        secret = "whsec_test_secret"
+        with patch("bridge.urlopen", return_value=fake_resp) as mocked:
+            status, body = forward_to_upstream(
+                {"text": "from pebble"},
+                upstream_url="https://example.com/openbot",
+                openbot_secret=secret,
+                openbot_event_type="pebble.transcription",
+            )
+
+        self.assertEqual(status, 202)
+        self.assertEqual(body["status"], 202)
+        req = mocked.call_args[0][0]
+        sent = req.data.decode("utf-8")
+        payload = json.loads(sent)
+        self.assertEqual(payload["type"], "pebble.transcription")
+        self.assertEqual(payload["data"], {"text": "from pebble"})
+
+        ts = req.get_header("X-openbot-timestamp")
+        did = req.get_header("X-openbot-delivery-id")
+        sig = req.get_header("X-openbot-signature")
+        self.assertTrue(ts and did and sig)
+        # Signature must be over the exact body bytes we sent.
+        expected = (
+            "sha256="
+            + hmac.new(
+                secret.encode("utf-8"),
+                f"{ts}.{did}.{sent}".encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+        )
+        self.assertEqual(sig, expected)
+        self.assertIsNone(req.get_header("Authorization"))
+        # Compact serialization (no spaces) matches serialize_json_body.
+        self.assertEqual(sent, serialize_json_body(payload))
+
+
 class HandleTests(unittest.TestCase):
     def test_health(self):
         status, body = handle_get("/health")
@@ -93,13 +179,11 @@ class HandleTests(unittest.TestCase):
 
         with patch.dict(
             "os.environ",
-            {"UPSTREAM_URL": "https://example.com/hook", "SHARED_SECRET": ""},
+            {"UPSTREAM_URL": "https://example.com/hook"},
             clear=False,
         ):
-            # Ensure SHARED_SECRET does not force auth from a polluted env.
-            import os
-
             os.environ.pop("SHARED_SECRET", None)
+            os.environ.pop("OPENBOT_WEBHOOK_SECRET", None)
             with patch("bridge.urlopen", return_value=fake_resp) as mocked:
                 status, body = handle_post(
                     "/hook",
@@ -115,6 +199,7 @@ class HandleTests(unittest.TestCase):
                     json.loads(req.data.decode("utf-8")),
                     {"text": "hello from index"},
                 )
+                self.assertIsNone(req.get_header("X-openbot-signature"))
 
 
 if __name__ == "__main__":

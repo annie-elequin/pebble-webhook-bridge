@@ -43,6 +43,7 @@ class LambdaHandlerTests(unittest.TestCase):
 
         os.environ["UPSTREAM_URL"] = "https://example.com/dest"
         os.environ.pop("SHARED_SECRET", None)
+        os.environ.pop("OPENBOT_WEBHOOK_SECRET", None)
 
         with patch("bridge.urlopen", return_value=fake_resp):
             result = handler_mod.handler(

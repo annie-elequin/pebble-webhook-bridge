@@ -11,5 +11,7 @@ services:
       UPSTREAM_URL: "${UPSTREAM_URL}"
       UPSTREAM_BEARER: "${UPSTREAM_BEARER:-}"
       UPSTREAM_AUTH_HEADER: "${UPSTREAM_AUTH_HEADER:-}"
+      OPENBOT_WEBHOOK_SECRET: "${OPENBOT_WEBHOOK_SECRET:-}"
+      OPENBOT_EVENT_TYPE: "${OPENBOT_EVENT_TYPE:-pebble.transcription}"
       SHARED_SECRET: "${SHARED_SECRET:-}"
     restart: unless-stopped
