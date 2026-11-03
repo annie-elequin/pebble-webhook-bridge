@@ -7,9 +7,11 @@ from unittest.mock import MagicMock, patch
 from bridge import (
     UnsupportedContentType,
     check_auth,
+    forward_to_upstream,
     handle_get,
     handle_post,
     parse_body,
+    parse_upstream_headers,
 )
 
 
@@ -46,6 +48,63 @@ class ParseBodyTests(unittest.TestCase):
     def test_unsupported(self):
         with self.assertRaises(UnsupportedContentType):
             parse_body("application/xml", b"<xml/>")
+
+
+class UpstreamHeadersTests(unittest.TestCase):
+    def test_empty(self):
+        self.assertEqual(parse_upstream_headers(""), {})
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+
+            os.environ.pop("UPSTREAM_HEADERS", None)
+            self.assertEqual(parse_upstream_headers(None), {})
+
+    def test_json_object(self):
+        self.assertEqual(
+            parse_upstream_headers('{"X-Custom":"abc","X-Source":"pebble"}'),
+            {"X-Custom": "abc", "X-Source": "pebble"},
+        )
+
+    def test_invalid_json(self):
+        with self.assertRaises(ValueError):
+            parse_upstream_headers("not-json")
+
+    def test_forward_merges_headers(self):
+        fake_resp = MagicMock()
+        fake_resp.status = 200
+        fake_resp.read.return_value = b"ok"
+        fake_resp.__enter__.return_value = fake_resp
+        fake_resp.__exit__.return_value = False
+
+        with patch("bridge.urlopen", return_value=fake_resp) as mocked:
+            status, _body = forward_to_upstream(
+                {"text": "hi"},
+                upstream_url="https://example.com/dest",
+                upstream_headers={"X-Custom": "abc", "X-Source": "pebble"},
+            )
+            self.assertEqual(status, 200)
+            req = mocked.call_args[0][0]
+            # urllib stores headers with title-case via add_header; get_header uses that.
+            self.assertEqual(req.get_header("X-custom"), "abc")
+            self.assertEqual(req.get_header("X-source"), "pebble")
+            self.assertEqual(req.get_header("Content-type"), "application/json")
+
+    def test_auth_env_overrides_extra_authorization(self):
+        fake_resp = MagicMock()
+        fake_resp.status = 200
+        fake_resp.read.return_value = b"ok"
+        fake_resp.__enter__.return_value = fake_resp
+        fake_resp.__exit__.return_value = False
+
+        with patch("bridge.urlopen", return_value=fake_resp) as mocked:
+            forward_to_upstream(
+                {"text": "hi"},
+                upstream_url="https://example.com/dest",
+                upstream_bearer="from-bearer",
+                upstream_headers={"Authorization": "Bearer from-headers"},
+            )
+            req = mocked.call_args[0][0]
+            self.assertEqual(req.get_header("Authorization"), "Bearer from-bearer")
 
 
 class AuthTests(unittest.TestCase):

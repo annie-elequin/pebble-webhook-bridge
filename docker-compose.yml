@@ -11,5 +11,6 @@ services:
       UPSTREAM_URL: "${UPSTREAM_URL}"
       UPSTREAM_BEARER: "${UPSTREAM_BEARER:-}"
       UPSTREAM_AUTH_HEADER: "${UPSTREAM_AUTH_HEADER:-}"
+      UPSTREAM_HEADERS: "${UPSTREAM_HEADERS:-}"
       SHARED_SECRET: "${SHARED_SECRET:-}"
     restart: unless-stopped
