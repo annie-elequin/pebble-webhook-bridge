@@ -1,138 +1,142 @@
 # Webhook Bridge
 
-A lightweight HTTP service that translates form-encoded and plain text webhooks to JSON format before forwarding them to an upstream webhook URL.
+A lightweight HTTP service that translates form-encoded and plain text webhooks to JSON, then forwards them to any upstream webhook URL you configure.
+
+**One self-hosted instance = one user = one destination.** There is no shared multi-tenant host and no Matrix / Maubot / Beeper dependency. Paste any JSON-accepting webhook as `UPSTREAM_URL` (AI chat, agent inbound URL, automation, etc.).
 
 ## What It Does
 
-Many webhook clients (like Pebble smartwatches) send data as `application/x-www-form-urlencoded` or `text/plain`, but some webhook receivers only accept `application/json`. This bridge sits in the middle, accepting various content types and forwarding everything as properly formatted JSON.
+Some clients (including Pebble / Index 01) POST `application/x-www-form-urlencoded` or `text/plain`. Many AI chat and automation webhooks only accept `application/json` and return **HTTP 415** otherwise. This bridge sits in the middle:
 
-**Supported Input Formats:**
-- `application/json` - forwarded as-is
-- `application/x-www-form-urlencoded` - parsed into JSON object
-- `text/plain` - parsed as JSON if valid, otherwise wrapped as `{"text": "..."}`
+```
+Pebble / Index 01  →  your bridge URL  →  UPSTREAM_URL (any JSON webhook)
+```
 
-**Features:**
-- Zero dependencies (Python standard library only)
-- Optional authentication for incoming requests
-- Optional authentication for upstream requests
-- Health check endpoint
+**Supported input formats**
+
+- `application/json` — forwarded as-is (object pass-through)
+- `application/x-www-form-urlencoded` — fields become a JSON object
+- `text/plain` — parse as JSON if valid, otherwise wrap as `{"text": "..."}`
+
+Payload fields are **not** reshaped for a specific chat product. Whatever the client sends (after content-type conversion) is what upstream receives.
+
+**Features**
+
+- Zero runtime dependencies (Python standard library only)
+- Optional auth for incoming requests (`SHARED_SECRET`)
+- Optional auth for upstream (`UPSTREAM_BEARER` or `UPSTREAM_AUTH_HEADER`)
+- `GET /health` → `{"ok": true}`
 - ~10 second upstream timeout
-- Docker-ready with Portainer support
+- Docker / Portainer (primary) and AWS Lambda packaging under `lambda/`
+
+## Pebble Index 01 setup
+
+Index 01 can send transcriptions to a webhook URL and can usually set custom headers. Typical flow:
+
+1. **Choose a destination** — any HTTPS URL that accepts a JSON POST (your AI chat inbound webhook, agent hook, Zapier/Make, etc.).
+2. **Run this bridge** — Docker (below) or Lambda (`lambda/README.md`). Set:
+   - `UPSTREAM_URL` = that destination
+   - optional `SHARED_SECRET` if you want the ring (or companion) to prove it may call your bridge
+   - optional `UPSTREAM_BEARER` / `UPSTREAM_AUTH_HEADER` if the destination requires auth
+3. **Point Index 01 at your bridge** — use `https://<your-host>/hook` (or `/`).
+4. **If you set `SHARED_SECRET`** — configure Index 01 (or the companion that posts) with either:
+   - header `X-Bridge-Token: <same secret>`, or
+   - header `Authorization: Bearer <same secret>`
+5. Speak / send a transcription — the bridge converts the body to JSON and POSTs it to `UPSTREAM_URL`.
+
+You keep Docker as the everyday self-host path. Friends who prefer AWS can use the `lambda/` zip without changing the Docker flow.
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `PORT` | No | `8080` | Port to listen on |
-| `UPSTREAM_URL` | **Yes** | - | Upstream webhook URL to forward requests to |
-| `UPSTREAM_BEARER` | No | - | Bearer token for upstream authentication |
-| `UPSTREAM_AUTH_HEADER` | No | - | Full Authorization header value (overrides `UPSTREAM_BEARER`) |
-| `SHARED_SECRET` | No | - | Require incoming requests to send this token via `X-Bridge-Token` header or `Authorization: Bearer` |
+| `PORT` | No | `8080` | Listen port (Docker / native only) |
+| `UPSTREAM_URL` | **Yes** | — | Destination webhook URL (any JSON POST endpoint) |
+| `UPSTREAM_BEARER` | No | — | Bearer token for upstream |
+| `UPSTREAM_AUTH_HEADER` | No | — | Full `Authorization` value (overrides `UPSTREAM_BEARER`) |
+| `SHARED_SECRET` | No | — | Require `X-Bridge-Token` or `Authorization: Bearer` on incoming requests |
 
 ## Endpoints
 
 ### `POST /` or `POST /hook`
-Accept webhook data in any supported format and forward as JSON to upstream.
 
-**Request Headers:**
-- `Content-Type`: `application/json`, `application/x-www-form-urlencoded`, or `text/plain`
-- `X-Bridge-Token` or `Authorization: Bearer <token>` (if `SHARED_SECRET` is set)
+Accept webhook data in a supported format and forward as JSON to upstream.
 
-**Response:**
-- Status code matches upstream response
-- Body: `{"status": <code>, "response": "<upstream_body>"}` or error details
+**Response:** status mirrors upstream when possible; body is a short JSON summary such as `{"status": 200, "response": "..."}` or an error object.
 
 ### `GET /health`
-Health check endpoint.
 
-**Response:**
 ```json
 {"ok": true}
 ```
 
-## Quick Start
-
-### Docker Compose (Local)
+## Quick Start (Docker)
 
 1. Clone this repository
-2. Copy `.env.example` to `.env` and configure:
-   ```bash
-   cp .env.example .env
-   ```
-3. Edit `.env` and set at minimum:
-   ```
-   UPSTREAM_URL=https://your-webhook-endpoint.com/webhook
-   ```
-4. Start the service:
-   ```bash
-   docker-compose up -d
-   ```
-5. Test the health check:
-   ```bash
-   curl http://localhost:8080/health
-   ```
+2. Copy `.env.example` to `.env` and set at least `UPSTREAM_URL`
+3. Start:
+
+```bash
+docker-compose up -d
+curl http://localhost:8080/health
+```
 
 ### Portainer Git Stack
 
-1. In Portainer, go to **Stacks** → **Add stack**
-2. Choose **Repository** as build method
-3. Configure:
-   - **Repository URL**: `https://github.com/your-username/webhook-bridge`
-   - **Repository reference**: `refs/heads/main`
-   - **Compose path**: `docker-compose.yml`
-4. Under **Environment variables**, add:
-   ```
-   UPSTREAM_URL=https://your-webhook-endpoint.com/webhook
-   PORT=8080
-   ```
-   Add optional variables as needed:
-   ```
-   SHARED_SECRET=your-secret-token
-   UPSTREAM_BEARER=upstream-auth-token
-   ```
-5. Click **Deploy the stack**
-6. Portainer will clone the repo, build the image, and start the service
+1. **Stacks** → **Add stack** → **Repository**
+2. Point at this repo, branch `main`, compose path `docker-compose.yml`
+3. Set environment variables in the Portainer UI (`UPSTREAM_URL`, optional secrets). Do not bake secrets into the compose file.
+4. Deploy
 
-### Native Python (Development)
+### Native Python
 
 ```bash
-export UPSTREAM_URL=https://your-webhook-endpoint.com/webhook
+export UPSTREAM_URL=https://example.com/your-json-webhook
 python3 app.py
 ```
 
+## AWS Lambda
+
+See [`lambda/README.md`](lambda/README.md). Package with:
+
+```bash
+bash lambda/package.sh
+```
+
+Upload `lambda/function.zip`, set handler `handler.handler`, configure the same env vars, attach a Function URL or API Gateway. Lambda packaging notes live under `lambda/` so Docker stays the default path.
+
 ## Usage Examples
 
-### Form-Encoded Request
+### Form-encoded
+
 ```bash
 curl -X POST http://localhost:8080/hook \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "message=Hello&priority=high"
 ```
-Forwards as:
-```json
-{"message": "Hello", "priority": "high"}
-```
 
-### Plain Text Request
+Forwards: `{"message": "Hello", "priority": "high"}`
+
+### Plain text
+
 ```bash
 curl -X POST http://localhost:8080/hook \
   -H "Content-Type: text/plain" \
   -d "Alert: System status changed"
 ```
-Forwards as:
-```json
-{"text": "Alert: System status changed"}
-```
 
-### JSON Request (Pass-Through)
+Forwards: `{"text": "Alert: System status changed"}`
+
+### JSON pass-through
+
 ```bash
 curl -X POST http://localhost:8080/hook \
   -H "Content-Type: application/json" \
   -d '{"event": "alert", "level": "warning"}'
 ```
-Forwards as-is.
 
-### With Authentication
+### With bridge auth
+
 ```bash
 curl -X POST http://localhost:8080/hook \
   -H "Content-Type: text/plain" \
@@ -142,8 +146,4 @@ curl -X POST http://localhost:8080/hook \
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
-
-## Contributing
-
-This is a simple utility project. Feel free to fork and adapt for your needs!
+MIT License — see [LICENSE](LICENSE).

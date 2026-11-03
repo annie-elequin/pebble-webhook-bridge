@@ -27,6 +27,9 @@ wheels/
 # Docker
 .dockerignore
 
+# Lambda build artifact
+lambda/function.zip
+
 # IDE
 .vscode/
 .idea/
